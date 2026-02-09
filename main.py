@@ -1,38 +1,29 @@
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import round
+from pyspark.sql.functions import concat, col
 
 def create_spark_session():
     spark = SparkSession.builder.appName("PipelineApp").getOrCreate()
     return spark
 
-def read_fact_sps_pump(spark):
-    df = spark.read.table("gold.fact_sps_pump")
+def read_source_table(spark, table_name):
+    df = spark.read.table(table_name)
     return df
 
-def calculate_avg_pump_run_duration(df):
-    updated_df = df.withColumn("avg_pump_run_duration", round(df.run_hrs_yd / df.start_yd, 2))
-    return updated_df
+def add_full_name_column(df):
+    df_with_full_name = df.withColumn("full_name", concat(col("first_name"), col("last_name")))
+    return df_with_full_name
 
-def write_to_staging_table(df):
-    df.write.mode("overwrite").saveAsTable("gold.stg_fact_sps_pump")
-
-def read_staging_table(spark):
-    df_staging = spark.read.table("gold.stg_fact_sps_pump")
-    return df_staging
-
-def write_back_to_original_table(df):
-    df.write.mode("overwrite").saveAsTable("gold.fact_sps_pump")
+def write_destination_table(df, table_name):
+    df.coalesce(1).write.mode("overwrite").saveAsTable(table_name)
 
 def main():
     spark = create_spark_session()
-    df_fact = read_fact_sps_pump(spark)
-    df_calculated = calculate_avg_pump_run_duration(df_fact)
-    df_calculated.show()
-    write_to_staging_table(df_calculated)
-    df_staging = read_staging_table(spark)
-    write_back_to_original_table(df_staging)
-    print("Calculation and write operations completed successfully.")
+    source_table = "gap_retail.customers"
+    destination_table = "gap_retail.customers_transformed"
+    df_source = read_source_table(spark, source_table)
+    df_with_full_name = add_full_name_column(df_source)
+    write_destination_table(df_with_full_name, destination_table)
 
 if __name__ == "__main__":
     main()
