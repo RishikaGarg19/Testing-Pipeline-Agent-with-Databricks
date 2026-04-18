@@ -1,253 +1,231 @@
 import pytest
 from pyspark.sql import SparkSession, Row
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    DateType,
-    IntegerType,
-    BooleanType,
-)
+from pyspark.sql.types import StructType, StructField, StringType, DateType, IntegerType, BooleanType, LongType
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from unittest.mock import patch
 
-# Import functions from the main script
-from main import add_age_and_drinking_status, main
+from main import add_age_and_eligibility_columns
 
-
-@pytest.fixture(scope="session")
+# Per CRITICAL RULES, this fixture MUST be copied verbatim
+@pytest.fixture(scope='session')
 def spark():
-    """Creates a SparkSession for the test suite."""
-    spark_session = (
-        SparkSession.builder.master("local[2]")
-        .appName("pytest-pyspark-etl-tests")
-        .config("spark.sql.session.timeZone", "UTC")
-        .getOrCreate()
-    )
-    yield spark_session
-    spark_session.stop()
+    import os
+    builder = SparkSession.builder.appName('pytest-spark-unit-tests')
+    if 'SPARK_REMOTE' not in os.environ:
+        builder = builder.master('local[1]')
+    return builder.getOrCreate()
 
-
-def test_add_age_and_drinking_status_for_adult_over_21(spark):
+def test_add_age_and_eligibility_columns_under_18(spark):
     """
-    Tests that a person well over 21 is correctly identified with age and canDrink=True.
+    Tests that a person under 18 is correctly identified as unable to drive or drink.
     """
-    schema = StructType([
-        StructField("id", IntegerType(), True),
-        StructField("dob", DateType(), True),
-    ])
-    # Dynamically calculate DOB for someone who is 33 years old today.
     today = date.today()
-    dob_33_years_ago = today - relativedelta(years=33)
-    data = [(1, dob_33_years_ago)]
-    input_df = spark.createDataFrame(data, schema)
+    dob_17_years_ago = today - relativedelta(years=17)
 
-    result_df = add_age_and_drinking_status(input_df)
+    source_data = [Row(id=1, dob=dob_17_years_ago)]
+    source_df = spark.createDataFrame(source_data)
 
-    expected_data = [Row(id=1, dob=dob_33_years_ago, age=33, canDrink=True)]
-    assert result_df.collect() == expected_data
-
-
-def test_add_age_and_drinking_status_for_person_exactly_21(spark):
-    """
-    Tests the boundary case where a person is exactly 21 years old.
-    """
-    schema = StructType([
-        StructField("id", IntegerType(), True),
+    expected_data = [Row(id=1, dob=dob_17_years_ago, age=17, canDrive=False, canDrink=False)]
+    expected_schema = StructType([
+        StructField("id", LongType(), True),
         StructField("dob", DateType(), True),
+        StructField("age", IntegerType(), True),
+        StructField("canDrive", BooleanType(), True),
+        StructField("canDrink", BooleanType(), True),
     ])
-    # Dynamically calculate DOB for someone who turns 21 today.
+    expected_df = spark.createDataFrame(expected_data, schema=expected_schema)
+
+    result_df = add_age_and_eligibility_columns(source_df)
+
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+    assert result_df.schema == expected_df.schema
+
+def test_add_age_and_eligibility_columns_is_18(spark):
+    """
+    Tests that a person who is exactly 18 can drive but not drink.
+    """
     today = date.today()
-    dob_exactly_21 = today - relativedelta(years=21)
-    data = [(1, dob_exactly_21)]
-    input_df = spark.createDataFrame(data, schema)
+    dob_18_years_ago = today - relativedelta(years=18)
 
-    result_df = add_age_and_drinking_status(input_df)
+    source_data = [Row(id=1, dob=dob_18_years_ago)]
+    source_df = spark.createDataFrame(source_data)
 
-    expected_data = [Row(id=1, dob=dob_exactly_21, age=21, canDrink=True)]
-    assert result_df.collect() == expected_data
+    expected_data = [Row(id=1, dob=dob_18_years_ago, age=18, canDrive=True, canDrink=False)]
+    expected_df = spark.createDataFrame(expected_data)
 
+    result_df = add_age_and_eligibility_columns(source_df)
 
-def test_add_age_and_drinking_status_for_person_just_under_21(spark):
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+
+def test_add_age_and_eligibility_columns_between_18_and_21(spark):
     """
-    Tests the boundary case where a person is one day shy of their 21st birthday.
+    Tests that a person between 18 and 21 (e.g., 20) can drive but not drink.
     """
-    schema = StructType([
-        StructField("id", IntegerType(), True),
-        StructField("dob", DateType(), True),
-    ])
-    # Dynamically calculate DOB for someone who turns 21 tomorrow.
     today = date.today()
-    dob_almost_21 = today - relativedelta(years=21) + relativedelta(days=1)
-    data = [(1, dob_almost_21)]
-    input_df = spark.createDataFrame(data, schema)
+    dob_20_years_ago = today - relativedelta(years=20)
 
-    result_df = add_age_and_drinking_status(input_df)
+    source_data = [Row(id=1, dob=dob_20_years_ago)]
+    source_df = spark.createDataFrame(source_data)
 
-    expected_data = [Row(id=1, dob=dob_almost_21, age=20, canDrink=False)]
-    assert result_df.collect() == expected_data
+    expected_data = [Row(id=1, dob=dob_20_years_ago, age=20, canDrive=True, canDrink=False)]
+    expected_df = spark.createDataFrame(expected_data)
 
+    result_df = add_age_and_eligibility_columns(source_df)
 
-def test_add_age_and_drinking_status_for_minor_under_21(spark):
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+
+def test_add_age_and_eligibility_columns_is_21(spark):
     """
-    Tests that a person well under 21 is correctly identified as a minor who cannot drink.
+    Tests that a person who is exactly 21 can both drive and drink.
     """
-    schema = StructType([
-        StructField("id", IntegerType(), True),
-        StructField("dob", DateType(), True),
-    ])
-    # Dynamically calculate DOB for someone who is 13 years old today.
     today = date.today()
-    dob_13_years_ago = today - relativedelta(years=13)
-    data = [(1, dob_13_years_ago)]
-    input_df = spark.createDataFrame(data, schema)
+    dob_21_years_ago = today - relativedelta(years=21)
 
-    result_df = add_age_and_drinking_status(input_df)
+    source_data = [Row(id=1, dob=dob_21_years_ago)]
+    source_df = spark.createDataFrame(source_data)
 
-    expected_data = [Row(id=1, dob=dob_13_years_ago, age=13, canDrink=False)]
-    assert result_df.collect() == expected_data
+    expected_data = [Row(id=1, dob=dob_21_years_ago, age=21, canDrive=True, canDrink=True)]
+    expected_df = spark.createDataFrame(expected_data)
 
+    result_df = add_age_and_eligibility_columns(source_df)
 
-def test_add_age_and_drinking_status_with_null_dob(spark):
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+
+def test_add_age_and_eligibility_columns_over_21(spark):
     """
-    Tests the edge case where the 'dob' is null; 'age' should be null and 'canDrink' should be False.
+    Tests that a person over 21 (e.g., 40) can both drive and drink.
     """
-    schema = StructType([
-        StructField("id", IntegerType(), True),
-        StructField("dob", DateType(), True),
-    ])
-    data = [(1, None)]
-    input_df = spark.createDataFrame(data, schema)
-
-    result_df = add_age_and_drinking_status(input_df)
-
-    expected_data = [Row(id=1, dob=None, age=None, canDrink=False)]
-    assert result_df.collect() == expected_data
-
-
-def test_add_age_and_drinking_status_with_duplicates(spark):
-    """
-    Tests that duplicate input rows are processed correctly and are preserved in the output.
-    """
-    schema = StructType([
-        StructField("id", IntegerType(), True),
-        StructField("name", StringType(), True),
-        StructField("dob", DateType(), True),
-    ])
     today = date.today()
-    dob_over_21 = today - relativedelta(years=28)
-    dob_under_21 = today - relativedelta(years=18)
-    data = [
-        (1, "Alice", dob_over_21),
-        (1, "Alice", dob_over_21),  # Duplicate
-        (2, "Bob", dob_under_21),
+    dob_40_years_ago = today - relativedelta(years=40)
+
+    source_data = [Row(id=1, dob=dob_40_years_ago)]
+    source_df = spark.createDataFrame(source_data)
+
+    expected_data = [Row(id=1, dob=dob_40_years_ago, age=40, canDrive=True, canDrink=True)]
+    expected_df = spark.createDataFrame(expected_data)
+
+    result_df = add_age_and_eligibility_columns(source_df)
+
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+
+def test_add_age_and_eligibility_columns_null_dob(spark):
+    """
+    Tests that a row with a null 'dob' results in a null 'age' and false for eligibility flags.
+    """
+    source_data = [Row(id=1, dob=None)]
+    source_df = spark.createDataFrame(source_data)
+
+    expected_data = [Row(id=1, dob=None, age=None, canDrive=False, canDrink=False)]
+    expected_df = spark.createDataFrame(expected_data)
+
+    result_df = add_age_and_eligibility_columns(source_df)
+
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+
+def test_add_age_and_eligibility_columns_birthday_is_today(spark):
+    """
+    Tests the boundary case where the date of birth is the current date, resulting in age 0.
+    """
+    today = date.today()
+
+    source_data = [Row(id=1, dob=today)]
+    source_df = spark.createDataFrame(source_data)
+
+    expected_data = [Row(id=1, dob=today, age=0, canDrive=False, canDrink=False)]
+    expected_df = spark.createDataFrame(expected_data)
+
+    result_df = add_age_and_eligibility_columns(source_df)
+
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+
+def test_add_age_and_eligibility_columns_birthday_is_future(spark):
+    """
+    Tests the edge case where the date of birth is in the future, resulting in a negative age.
+    """
+    today = date.today()
+    future_dob = today + relativedelta(years=1)
+
+    source_data = [Row(id=1, dob=future_dob)]
+    source_df = spark.createDataFrame(source_data)
+
+    expected_data = [Row(id=1, dob=future_dob, age=-1, canDrive=False, canDrink=False)]
+    expected_df = spark.createDataFrame(expected_data)
+
+    result_df = add_age_and_eligibility_columns(source_df)
+
+    assert result_df.count() == 1
+    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+
+def test_add_age_and_eligibility_columns_preserves_other_columns(spark):
+    """
+    Tests that existing columns in the input DataFrame are preserved in the output.
+    """
+    today = date.today()
+    dob = today - relativedelta(years=25)
+
+    source_data = [Row(id=100, name='John Doe', city='New York', dob=dob)]
+    source_df = spark.createDataFrame(source_data)
+
+    expected_data = [Row(id=100, name='John Doe', city='New York', dob=dob, age=25, canDrive=True, canDrink=True)]
+    expected_df = spark.createDataFrame(expected_data)
+
+    result_df = add_age_and_eligibility_columns(source_df)
+
+    assert result_df.count() == 1
+    assert sorted(result_df.columns) == sorted(expected_df.columns)
+    assert result_df.select('id', 'name', 'city').collect()[0] == Row(id=100, name='John Doe', city='New York')
+
+def test_add_age_and_eligibility_columns_handles_duplicates(spark):
+    """
+    Tests that duplicate input rows are processed correctly.
+    """
+    today = date.today()
+    dob_30 = today - relativedelta(years=30)
+    dob_16 = today - relativedelta(years=16)
+
+    source_data = [
+        Row(id=1, dob=dob_30),
+        Row(id=1, dob=dob_30), # Duplicate
+        Row(id=2, dob=dob_16)
     ]
-    input_df = spark.createDataFrame(data, schema)
+    source_df = spark.createDataFrame(source_data)
 
-    result_df = add_age_and_drinking_status(input_df)
+    result_df = add_age_and_eligibility_columns(source_df)
 
-    expected_data = {
-        Row(id=1, name="Alice", dob=dob_over_21, age=28, canDrink=True),
-        Row(id=2, name="Bob", dob=dob_under_21, age=18, canDrink=False),
-    }
-    # Check count to ensure duplicates were kept
     assert result_df.count() == 3
-    # Use distinct to check the unique transformed rows
-    assert set(result_df.distinct().collect()) == expected_data
+    # Check count for a specific case
+    assert result_df.filter("age = 30 AND canDrive = true AND canDrink = true").count() == 2
+    assert result_df.filter("age = 16 AND canDrive = false AND canDrink = false").count() == 1
 
-
-def test_add_age_and_drinking_status_maintains_original_columns(spark):
+def test_add_age_and_eligibility_columns_empty_dataframe(spark):
     """
-    Tests that the function preserves all original columns in the DataFrame.
+    Tests that the function handles an empty input DataFrame gracefully.
     """
-    schema = StructType([
-        StructField("customer_id", StringType(), True),
-        StructField("first_name", StringType(), True),
-        StructField("last_name", StringType(), True),
+    source_schema = StructType([
+        StructField("id", IntegerType(), True),
         StructField("dob", DateType(), True),
     ])
-    data = [("C1", "John", "Doe", date(2000, 1, 1))]
-    input_df = spark.createDataFrame(data, schema)
+    source_df = spark.createDataFrame([], schema=source_schema)
 
-    result_df = add_age_and_drinking_status(input_df)
+    result_df = add_age_and_eligibility_columns(source_df)
+    
+    expected_columns = ["id", "dob", "age", "canDrive", "canDrink"]
+    assert result_df.count() == 0
+    assert sorted(result_df.columns) == sorted(expected_columns)
 
-    expected_columns = ["customer_id", "first_name", "last_name", "dob", "age", "canDrink"]
-    assert result_df.columns == expected_columns
-
-
-def test_add_age_and_drinking_status_output_schema(spark):
+def test_add_age_and_eligibility_columns_raises_error_if_dob_missing(spark):
     """
-    Tests that the new columns 'age' and 'canDrink' have the correct data types.
+    Tests that a ValueError is raised if the 'dob' column is not present.
     """
-    schema = StructType([StructField("dob", DateType(), True)])
-    data = [(date(2000, 1, 1),)]
-    input_df = spark.createDataFrame(data, schema)
-
-    result_df = add_age_and_drinking_status(input_df)
-    result_schema = result_df.schema
-
-    assert result_schema["age"].dataType == IntegerType()
-    assert result_schema["canDrink"].dataType == BooleanType()
-
-
-def test_add_age_and_drinking_status_raises_error_if_dob_missing(spark):
-    """
-    Tests that a ValueError is raised if the required 'dob' column is not present.
-    """
-    schema = StructType([StructField("id", IntegerType(), True)])
-    data = [(1,)]
-    input_df = spark.createDataFrame(data, schema)
+    source_data = [Row(id=1, date_of_birth=date(2000, 1, 1))]
+    source_df = spark.createDataFrame(source_data)
 
     with pytest.raises(ValueError, match="Input DataFrame must contain a 'dob' column."):
-        add_age_and_drinking_status(input_df)
-
-
-@patch("main.get_spark_session")
-@patch("main.read_table")
-@patch("main.write_table")
-def test_main_pipeline_flow(mock_write_table, mock_read_table, mock_get_spark_session, spark):
-    """
-    Tests the main function's orchestration logic using mocks for I/O functions.
-    """
-    # 1. Setup Mock Behavior
-    mock_get_spark_session.return_value = spark
-
-    today = date.today()
-    dob_over_21 = today - relativedelta(years=38)
-    dob_under_21 = today - relativedelta(years=9)
-
-    input_schema = StructType([
-        StructField("customer_id", StringType(), True),
-        StructField("dob", DateType(), True),
-    ])
-    input_data = [
-        ("C1", dob_over_21),
-        ("C2", dob_under_21),
-    ]
-    input_df = spark.createDataFrame(input_data, input_schema)
-    mock_read_table.return_value = input_df
-    mock_write_table.return_value = None
-
-    # 2. Execute the main function
-    main()
-
-    # 3. Assertions
-    mock_get_spark_session.assert_called_once_with("CustomerDrinkingStatus")
-    mock_read_table.assert_called_once_with(spark, "gap_retail.customers")
-    mock_write_table.assert_called_once()
-
-    # Check the arguments passed to write_table
-    written_df, written_table_name = mock_write_table.call_args[0]
-
-    assert written_table_name == "gap_retail.customers"
-
-    # Verify the content of the DataFrame passed to write_table
-    expected_data = [
-        Row(customer_id="C1", dob=dob_over_21, age=38, canDrink=True),
-        Row(customer_id="C2", dob=dob_under_21, age=9, canDrink=False),
-    ]
-
-    # Sort by a key to ensure order for reliable comparison
-    actual_data = sorted(written_df.collect(), key=lambda r: r["customer_id"])
-    assert actual_data == expected_data
+        add_age_and_eligibility_columns(source_df)
