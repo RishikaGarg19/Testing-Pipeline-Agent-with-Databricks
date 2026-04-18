@@ -2,14 +2,22 @@ import os
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import IntegerType, BooleanType
+from pyspark.sql.utils import AnalysisException
 
 # This script is designed to be run on a Databricks cluster.
-# The environment variables DATABRICKS_HOST, DATABRICKS_HTTP_PATH, and DATABRICKS_TOKEN
-# are typically pre-configured in Databricks environments for tools like Databricks Connect.
+# It assumes that the necessary Databricks environment variables
+# (DATABRICKS_HOST, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN)
+# are configured in the execution environment, which is standard for Databricks jobs.
 
 def get_spark_session(app_name: str) -> SparkSession:
     """
     Gets the existing SparkSession on Databricks or creates a new one.
+
+    Args:
+        app_name: The name for the Spark application.
+
+    Returns:
+        An active SparkSession instance.
     """
     return SparkSession.builder.appName(app_name).getOrCreate()
 
@@ -27,43 +35,42 @@ def read_table(spark: SparkSession, table_name: str) -> DataFrame:
     print(f"Reading data from '{table_name}'...")
     return spark.read.table(table_name)
 
-def add_age_and_drinking_status(df: DataFrame) -> DataFrame:
+def add_age_and_eligibility_columns(df: DataFrame) -> DataFrame:
     """
-    Calculates age from a 'dob' column and adds 'age' and 'canDrink' columns.
+    Calculates age from a 'dob' column and adds 'age', 'canDrive', and 'canDrink' columns.
     
     Args:
         df: The input DataFrame, which must contain a 'dob' column of DateType.
         
     Returns:
-        A new DataFrame with the 'age' and 'canDrink' columns added.
+        A new DataFrame with the 'age', 'canDrive', and 'canDrink' columns added.
 
     Raises:
         ValueError: If the 'dob' column is not present in the input DataFrame.
     """
-    print("Transforming data to add 'age' and 'canDrink' columns.")
+    print("Transforming data to add 'age', 'canDrive', and 'canDrink' columns.")
 
-    # Validate that the required 'dob' column exists before proceeding.
     if "dob" not in df.columns:
         raise ValueError("Input DataFrame must contain a 'dob' column.")
 
-    # Calculate age based on the 'dob' column.
-    # The age is the number of full years passed since the date of birth.
     df_with_age = df.withColumn(
         "age",
         F.floor(F.months_between(F.current_date(), F.col("dob")) / 12).cast(IntegerType())
     )
 
-    # Add a 'canDrink' boolean column based on whether the age is 21 or greater.
-    df_with_can_drink = df_with_age.withColumn(
+    df_with_eligibility = df_with_age.withColumn(
+        "canDrive",
+        F.when(F.col("age") >= 18, True).otherwise(False).cast(BooleanType())
+    ).withColumn(
         "canDrink",
         F.when(F.col("age") >= 21, True).otherwise(False).cast(BooleanType())
     )
     
-    return df_with_can_drink
+    return df_with_eligibility
 
 def write_table(df: DataFrame, table_name: str, num_partitions: int = 4) -> None:
     """
-    Writes a DataFrame to a table, overwriting the existing table and schema.
+    Writes a DataFrame to a table, overwriting any existing data.
     
     Args:
         df: The DataFrame to write.
@@ -71,9 +78,9 @@ def write_table(df: DataFrame, table_name: str, num_partitions: int = 4) -> None
         num_partitions: The number of partitions to repartition the data into before writing.
     """
     print(f"Writing data to '{table_name}'...")
-    # Repartitioning before writing helps control the size and number of output files,
+    # Repartitioning helps control the size and number of output files,
     # which can improve the performance of subsequent read operations.
-    # The 'overwriteSchema' option allows for adding the new columns to the table.
+    # The 'overwriteSchema' option allows for adding new columns to the table if it exists.
     (df.repartition(num_partitions)
        .write
        .mode("overwrite")
@@ -85,25 +92,26 @@ def main():
     """
     The main function to orchestrate the ETL pipeline.
     """
-    # --- Configuration ---
-    app_name = "CustomerDrinkingStatus"
-    customer_table = "gap_retail.customers"
+    app_name = "CustomerEligibilityPipeline"
+    source_table = "gap_retail.customers"
+    destination_table = "gap_retail.customers_2"
 
-    # --- Execution ---
-    # 1. Create a SparkSession
     spark = get_spark_session(app_name)
 
-    # 2. Extract: Read the customer data
-    customers_df = read_table(spark, customer_table)
+    try:
+        customers_df = read_table(spark, source_table)
 
-    # 3. Transform: Add age and drinking status columns
-    transformed_customers_df = add_age_and_drinking_status(customers_df)
+        transformed_customers_df = add_age_and_eligibility_columns(customers_df)
 
-    # 4. Load: Write the transformed data back to the same table
-    write_table(transformed_customers_df, customer_table)
+        write_table(transformed_customers_df, destination_table)
 
-    print("Pipeline completed successfully.")
-    spark.stop()
+        print("Pipeline completed successfully.")
+    except (AnalysisException, ValueError) as e:
+        print(f"An error occurred during the pipeline execution: {e}")
+    finally:
+        # It's good practice to stop the SparkSession to release resources,
+        # especially in standalone script submissions.
+        spark.stop()
 
 if __name__ == "__main__":
     main()
