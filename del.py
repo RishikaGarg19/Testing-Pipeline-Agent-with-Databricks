@@ -5,7 +5,9 @@ from pyspark.sql.types import IntegerType, BooleanType
 from pyspark.sql.utils import AnalysisException
 
 # This script is designed to be run on a Databricks cluster.
-# It assumes that the necessary Databricks environment variables for Spark are pre-configured.
+# It assumes that the necessary Databricks environment variables
+# (DATABRICKS_HOST, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN)
+# are configured in the execution environment, which is standard for Databricks jobs.
 
 def get_spark_session(app_name: str) -> SparkSession:
     """
@@ -33,37 +35,40 @@ def read_table(spark: SparkSession, table_name: str) -> DataFrame:
     print(f"Reading data from '{table_name}'...")
     return spark.read.table(table_name)
 
-def add_age_and_eligibility_columns(df: DataFrame) -> DataFrame:
+def transform_customers_data(df: DataFrame) -> DataFrame:
     """
-    Calculates age from a 'dob' column and adds 'age' and 'canVote' columns.
+    Calculates age from 'dob' and adds 'age', 'canDrive', and 'canVote' columns.
     
     Args:
         df: The input DataFrame, which must contain a 'dob' column of DateType.
         
     Returns:
-        A new DataFrame with the 'age' and 'canVote' columns added.
+        A new DataFrame with 'age', 'canDrive', and 'canVote' columns added.
 
     Raises:
         ValueError: If the 'dob' column is not present in the input DataFrame.
     """
-    print("Transforming data to add 'age' and 'canVote' columns.")
+    print("Transforming data to add 'age', 'canDrive', and 'canVote' columns.")
 
     if "dob" not in df.columns:
         raise ValueError("Input DataFrame must contain a 'dob' column.")
 
-    # Calculate age based on the 'dob' column
     df_with_age = df.withColumn(
         "age",
         F.floor(F.months_between(F.current_date(), F.col("dob")) / 12).cast(IntegerType())
     )
 
-    # Add the 'canVote' column based on the calculated age
-    df_with_eligibility = df_with_age.withColumn(
+    df_with_can_drive = df_with_age.withColumn(
+        "canDrive",
+        F.when(F.col("age") >= 18, True).otherwise(False).cast(BooleanType())
+    )
+    
+    df_with_can_vote = df_with_can_drive.withColumn(
         "canVote",
         F.when(F.col("age") >= 18, True).otherwise(False).cast(BooleanType())
     )
     
-    return df_with_eligibility
+    return df_with_can_vote
 
 def write_table(df: DataFrame, table_name: str, num_partitions: int = 4) -> None:
     """
@@ -89,7 +94,7 @@ def main():
     """
     The main function to orchestrate the ETL pipeline.
     """
-    app_name = "CustomerVotingEligibilityPipeline"
+    app_name = "CustomerAttributesPipeline"
     source_table = "gap_retail.customers"
     destination_table = "gap_retail.customers2"
 
@@ -98,7 +103,7 @@ def main():
     try:
         customers_df = read_table(spark, source_table)
 
-        transformed_customers_df = add_age_and_eligibility_columns(customers_df)
+        transformed_customers_df = transform_customers_data(customers_df)
 
         write_table(transformed_customers_df, destination_table)
 
