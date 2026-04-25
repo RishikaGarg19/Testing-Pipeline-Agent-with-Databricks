@@ -1,17 +1,16 @@
 import pytest
-from pyspark.sql import SparkSession, Row
+from pyspark.sql import SparkSession
 from pyspark.sql.types import (
     StructType,
     StructField,
+    IntegerType,
     StringType,
     DateType,
-    IntegerType,
     BooleanType,
 )
 from datetime import date
 from dateutil.relativedelta import relativedelta
-
-from main import add_age_and_eligibility_columns
+from main import add_customer_eligibility_columns, get_spark_session
 
 
 @pytest.fixture(scope='session')
@@ -23,222 +22,222 @@ def spark():
     return builder.getOrCreate()
 
 
-def test_add_age_and_eligibility_columns_adult_can_vote(spark):
+def test_get_spark_session_returns_session(spark):
     """
-    Tests that a person older than 18 is correctly identified as eligible to vote.
+    Tests that get_spark_session returns a valid SparkSession instance
+    with the correct application name.
     """
-    today = date.today()
-    dob_adult = today - relativedelta(years=25)
-
-    input_schema = StructType([
-        StructField("name", StringType()),
-        StructField("dob", DateType())
-    ])
-    input_data = [("Alice", dob_adult)]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
-
-    actual_df = add_age_and_eligibility_columns(input_df)
-
-    expected_schema = StructType([
-        StructField("name", StringType()),
-        StructField("dob", DateType()),
-        StructField("age", IntegerType()),
-        StructField("canVote", BooleanType())
-    ])
-    expected_data = [("Alice", dob_adult, 25, True)]
-    expected_df = spark.createDataFrame(expected_data, schema=expected_schema)
-
-    assert actual_df.schema.fields == expected_df.schema.fields
-    assert actual_df.collect() == expected_df.collect()
+    app_name = "TestApp"
+    test_spark = get_spark_session(app_name)
+    assert isinstance(test_spark, SparkSession)
+    assert test_spark.conf.get("spark.app.name") == app_name
+    # Stop the session created inside the test to avoid interference
+    test_spark.stop()
 
 
-def test_add_age_and_eligibility_columns_minor_cannot_vote(spark):
+def test_add_customer_eligibility_columns_standard_cases(spark):
     """
-    Tests that a person younger than 18 is correctly identified as not eligible to vote.
+    Tests that age, canDrive, and canVote are calculated correctly for
+    customers over 18, under 18, and exactly 18.
     """
     today = date.today()
-    dob_minor = today - relativedelta(years=16)
-
-    input_schema = StructType([
-        StructField("name", StringType()),
-        StructField("dob", DateType())
+    schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("dob", DateType(), True),
     ])
-    input_data = [("Bob", dob_minor)]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
-
-    actual_df = add_age_and_eligibility_columns(input_df)
-
-    expected_data = [Row(name="Bob", dob=dob_minor, age=16, canVote=False)]
-    actual_data = actual_df.collect()
-
-    assert len(actual_data) == 1
-    assert actual_data == expected_data
-
-
-def test_add_age_and_eligibility_columns_boundary_is_exactly_18(spark):
-    """
-    Tests the boundary condition where a person is exactly 18 years old today.
-    """
-    today = date.today()
-    dob_18 = today - relativedelta(years=18)
-
-    input_schema = StructType([StructField("dob", DateType())])
-    input_data = [(dob_18,)]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
-
-    actual_df = add_age_and_eligibility_columns(input_df)
-
-    expected_data = [Row(dob=dob_18, age=18, canVote=True)]
-    actual_data = actual_df.collect()
-
-    assert len(actual_data) == 1
-    assert actual_data == expected_data
-
-
-def test_add_age_and_eligibility_columns_boundary_day_before_18th_birthday(spark):
-    """
-    Tests the boundary condition where a person will turn 18 tomorrow.
-    """
-    today = date.today()
-    dob_almost_18 = today - relativedelta(years=18) + relativedelta(days=1)
-
-    input_schema = StructType([StructField("dob", DateType())])
-    input_data = [(dob_almost_18,)]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
-
-    actual_df = add_age_and_eligibility_columns(input_df)
-
-    expected_data = [Row(dob=dob_almost_18, age=17, canVote=False)]
-    actual_data = actual_df.collect()
-
-    assert len(actual_data) == 1
-    assert actual_data == expected_data
-
-
-def test_add_age_and_eligibility_columns_handles_null_dob(spark):
-    """
-    Tests that a null 'dob' results in a null 'age' and 'canVote' being False.
-    """
-    input_schema = StructType([
-        StructField("name", StringType()),
-        StructField("dob", DateType())
-    ])
-    input_data = [("Charlie", None)]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
-
-    actual_df = add_age_and_eligibility_columns(input_df)
-
-    expected_data = [Row(name="Charlie", dob=None, age=None, canVote=False)]
-    actual_data = actual_df.collect()
-
-    assert len(actual_data) == 1
-    assert actual_data == expected_data
-
-
-def test_add_age_and_eligibility_columns_preserves_other_columns(spark):
-    """
-    Tests that existing columns in the input DataFrame are preserved.
-    """
-    today = date.today()
-    dob = today - relativedelta(years=30)
-
-    input_schema = StructType([
-        StructField("id", IntegerType()),
-        StructField("dob", DateType()),
-        StructField("city", StringType())
-    ])
-    input_data = [(101, dob, "New York")]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
-
-    actual_df = add_age_and_eligibility_columns(input_df)
-
-    expected_schema = StructType([
-        StructField("id", IntegerType()),
-        StructField("dob", DateType()),
-        StructField("city", StringType()),
-        StructField("age", IntegerType()),
-        StructField("canVote", BooleanType())
-    ])
-    expected_data = [(101, dob, "New York", 30, True)]
-    expected_df = spark.createDataFrame(expected_data, schema=expected_schema)
-
-    assert actual_df.schema == expected_df.schema
-    assert actual_df.collect() == expected_df.collect()
-
-
-def test_add_age_and_eligibility_columns_handles_duplicates(spark):
-    """
-    Tests that duplicate input rows are processed correctly.
-    """
-    today = date.today()
-    dob_adult = today - relativedelta(years=40)
-    dob_minor = today - relativedelta(years=10)
-
-    input_schema = StructType([StructField("dob", DateType())])
-    input_data = [(dob_adult,), (dob_minor,), (dob_adult,)]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
-
-    actual_df = add_age_and_eligibility_columns(input_df)
-
-    expected_data = [
-        Row(dob=dob_adult, age=40, canVote=True),
-        Row(dob=dob_minor, age=10, canVote=False),
-        Row(dob=dob_adult, age=40, canVote=True)
+    data = [
+        (1, today - relativedelta(years=40)),  # 40 years old
+        (2, today - relativedelta(years=18)),  # Exactly 18 years old today
+        (3, today - relativedelta(years=17)),  # 16 years old (17th bday is today)
+        (4, today - relativedelta(years=18, days=-1)), # 17 years old (18th bday is tomorrow)
     ]
+    source_df = spark.createDataFrame(data, schema)
 
-    # Sorting to ensure comparison is deterministic
-    actual_data_sorted = sorted(actual_df.collect(), key=lambda r: (r.dob, r.age))
-    expected_data_sorted = sorted(expected_data, key=lambda r: (r.dob, r.age))
+    actual_df = add_customer_eligibility_columns(source_df)
+
+    expected_schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("dob", DateType(), True),
+        StructField("age", IntegerType(), True),
+        StructField("canDrive", BooleanType(), True),
+        StructField("canVote", BooleanType(), True),
+    ])
+    expected_data = [
+        (1, today - relativedelta(years=40), 40, True, True),
+        (2, today - relativedelta(years=18), 18, True, True),
+        (3, today - relativedelta(years=17), 17, False, False),
+        (4, today - relativedelta(years=18, days=-1), 17, False, False),
+    ]
+    expected_df = spark.createDataFrame(expected_data, expected_schema)
+
+    # Sort by a unique key to ensure comparison is deterministic
+    actual_rows = sorted(actual_df.collect(), key=lambda r: r['customer_id'])
+    expected_rows = sorted(expected_df.collect(), key=lambda r: r['customer_id'])
+
+    assert actual_rows == expected_rows
+    assert actual_df.schema == expected_df.schema
+
+
+def test_add_customer_eligibility_columns_with_null_dob(spark):
+    """
+    Tests that a null 'dob' results in a null 'age' and false for
+    'canDrive' and 'canVote'.
+    """
+    schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("dob", DateType(), True),
+    ])
+    data = [(1, None)]
+    source_df = spark.createDataFrame(data, schema)
+
+    actual_df = add_customer_eligibility_columns(source_df)
+
+    expected_schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("dob", DateType(), True),
+        StructField("age", IntegerType(), True),
+        StructField("canDrive", BooleanType(), True),
+        StructField("canVote", BooleanType(), True),
+    ])
+    expected_data = [(1, None, None, False, False)]
+    expected_df = spark.createDataFrame(expected_data, expected_schema)
+
+    assert actual_df.collect() == expected_df.collect()
+    assert actual_df.schema == expected_df.schema
+
+
+def test_add_customer_eligibility_columns_empty_dataframe(spark):
+    """
+    Tests that the function returns an empty DataFrame with the correct schema
+    when the input is empty.
+    """
+    schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("dob", DateType(), True),
+    ])
+    source_df = spark.createDataFrame([], schema)
+
+    actual_df = add_customer_eligibility_columns(source_df)
+
+    expected_schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("dob", DateType(), True),
+        StructField("age", IntegerType(), True),
+        StructField("canDrive", BooleanType(), True),
+        StructField("canVote", BooleanType(), True),
+    ])
+
+    assert actual_df.count() == 0
+    assert actual_df.schema == expected_schema
+
+
+def test_add_customer_eligibility_columns_with_duplicate_rows(spark):
+    """
+    Tests that duplicate input rows are preserved in the output.
+    """
+    today = date.today()
+    schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("name", StringType(), True),
+        StructField("dob", DateType(), True),
+    ])
+    data = [
+        (1, "Alice", today - relativedelta(years=30)),
+        (1, "Alice", today - relativedelta(years=30)),  # Duplicate
+        (2, "Bob", today - relativedelta(years=15)),
+    ]
+    source_df = spark.createDataFrame(data, schema)
+
+    actual_df = add_customer_eligibility_columns(source_df)
 
     assert actual_df.count() == 3
-    assert actual_data_sorted == expected_data_sorted
+
+    expected_data = [
+        (1, "Alice", today - relativedelta(years=30), 30, True, True),
+        (1, "Alice", today - relativedelta(years=30), 30, True, True),
+        (2, "Bob", today - relativedelta(years=15), 15, False, False),
+    ]
+
+    actual_rows = sorted(actual_df.collect(), key=lambda r: (r['customer_id'], r['name']))
+    expected_rows = sorted([row for row in expected_data], key=lambda r: (r[0], r[1]))
+
+    # We need to convert tuple to Row to compare with collected data
+    expected_df = spark.createDataFrame(expected_rows, actual_df.schema)
+    expected_rows_as_rows = sorted(expected_df.collect(), key=lambda r: (r['customer_id'], r['name']))
+
+    assert actual_rows == expected_rows_as_rows
 
 
-def test_add_age_and_eligibility_columns_raises_error_if_dob_missing(spark):
+def test_add_customer_eligibility_columns_raises_error_if_dob_missing(spark):
     """
     Tests that a ValueError is raised if the 'dob' column is not present.
     """
-    input_schema = StructType([StructField("name", StringType())])
-    input_data = [("David",)]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
+    schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("date_of_birth", DateType(), True), # incorrect column name
+    ])
+    data = [(1, date(2000, 1, 1))]
+    source_df = spark.createDataFrame(data, schema)
 
     with pytest.raises(ValueError, match="Input DataFrame must contain a 'dob' column."):
-        add_age_and_eligibility_columns(input_df)
+        add_customer_eligibility_columns(source_df)
 
 
-def test_add_age_and_eligibility_columns_with_mixed_data(spark):
+def test_add_customer_eligibility_columns_edge_case_leap_year_birthday(spark):
     """
-    Tests the function with a mix of adults, minors, and nulls.
+    Tests age calculation for a person born on a leap day (Feb 29).
+    This ensures date logic is robust.
+    """
+    # Find a past leap year for the test subject
+    today = date.today()
+    birth_year = 2000 # a leap year
+    
+    # Calculate age for someone born on Feb 29, 2000
+    expected_age = today.year - birth_year - ((today.month, today.day) < (2, 29))
+
+    schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("dob", DateType(), True),
+    ])
+    data = [(1, date(birth_year, 2, 29))]
+    source_df = spark.createDataFrame(data, schema)
+
+    actual_df = add_customer_eligibility_columns(source_df)
+    result = actual_df.first()
+
+    assert result['age'] == expected_age
+    assert result['canVote'] == (expected_age >= 18)
+    assert result['canDrive'] == (expected_age >= 18)
+
+
+def test_add_customer_eligibility_columns_does_not_alter_other_columns(spark):
+    """
+    Tests that the function adds new columns without altering existing ones.
     """
     today = date.today()
-    dob_adult = today - relativedelta(years=50)
-    dob_minor = today - relativedelta(years=15)
-    dob_18 = today - relativedelta(years=18)
-
-    input_schema = StructType([
-        StructField("name", StringType()),
-        StructField("dob", DateType())
+    schema = StructType([
+        StructField("customer_id", IntegerType(), True),
+        StructField("name", StringType(), True),
+        StructField("email", StringType(), True),
+        StructField("dob", DateType(), True),
     ])
-    input_data = [
-        ("Eve", dob_adult),
-        ("Frank", dob_minor),
-        ("Grace", None),
-        ("Heidi", dob_18)
+    data = [
+        (101, "John Doe", "john.doe@example.com", today - relativedelta(years=25)),
     ]
-    input_df = spark.createDataFrame(input_data, schema=input_schema)
+    source_df = spark.createDataFrame(data, schema)
 
-    actual_df = add_age_and_eligibility_columns(input_df)
+    actual_df = add_customer_eligibility_columns(source_df)
 
-    expected_data = [
-        Row(name='Eve', dob=dob_adult, age=50, canVote=True),
-        Row(name='Frank', dob=dob_minor, age=15, canVote=False),
-        Row(name='Grace', dob=None, age=None, canVote=False),
-        Row(name='Heidi', dob=dob_18, age=18, canVote=True)
-    ]
-    
-    # Sorting to ensure comparison is deterministic
-    actual_data_sorted = sorted(actual_df.collect(), key=lambda r: r.name)
-    expected_data_sorted = sorted(expected_data, key=lambda r: r.name)
-    
-    assert actual_df.count() == 4
-    assert actual_data_sorted == expected_data_sorted
+    # Check that original columns are still present and unchanged
+    result_row = actual_df.first()
+    assert result_row['customer_id'] == 101
+    assert result_row['name'] == "John Doe"
+    assert result_row['email'] == "john.doe@example.com"
+
+    # Check that new columns are added correctly
+    assert "age" in actual_df.columns
+    assert "canDrive" in actual_df.columns
+    assert "canVote" in actual_df.columns
+    assert result_row['age'] == 25
+    assert result_row['canDrive'] is True
+    assert result_row['canVote'] is True
