@@ -6,6 +6,7 @@ from pyspark.sql.utils import AnalysisException
 
 # This script is designed to be run on a Databricks cluster.
 # It assumes that the necessary Databricks environment variables
+# (DATABRICKS_HOST, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN)
 # are configured in the execution environment, which is standard for Databricks jobs.
 
 def get_spark_session(app_name: str) -> SparkSession:
@@ -34,20 +35,20 @@ def read_table(spark: SparkSession, table_name: str) -> DataFrame:
     print(f"Reading data from '{table_name}'...")
     return spark.read.table(table_name)
 
-def add_customer_eligibility_columns(df: DataFrame) -> DataFrame:
+def add_age_and_voting_status(df: DataFrame) -> DataFrame:
     """
-    Calculates age from a 'dob' column and adds 'age', 'canDrive', and 'canVote' columns.
+    Calculates age from a 'dob' column and adds 'age' and 'canVote' columns.
     
     Args:
         df: The input DataFrame, which must contain a 'dob' column of DateType.
         
     Returns:
-        A new DataFrame with the 'age', 'canDrive', and 'canVote' columns added.
+        A new DataFrame with the 'age' and 'canVote' columns added.
 
     Raises:
         ValueError: If the 'dob' column is not present in the input DataFrame.
     """
-    print("Transforming data to add 'age', 'canDrive', and 'canVote' columns.")
+    print("Transforming data to add 'age' and 'canVote' columns.")
 
     if "dob" not in df.columns:
         raise ValueError("Input DataFrame must contain a 'dob' column.")
@@ -57,17 +58,12 @@ def add_customer_eligibility_columns(df: DataFrame) -> DataFrame:
         F.floor(F.months_between(F.current_date(), F.col("dob")) / 12).cast(IntegerType())
     )
 
-    # Add eligibility columns based on the calculated age.
-    # 'canDrive' and 'canVote' are both true if age is 18 or older.
-    df_with_eligibility = df_with_age.withColumn(
-        "canDrive",
-        F.when(F.col("age") >= 18, True).otherwise(False).cast(BooleanType())
-    ).withColumn(
+    df_with_can_vote = df_with_age.withColumn(
         "canVote",
         F.when(F.col("age") >= 18, True).otherwise(False).cast(BooleanType())
     )
     
-    return df_with_eligibility
+    return df_with_can_vote
 
 def write_table(df: DataFrame, table_name: str, num_partitions: int = 4) -> None:
     """
@@ -93,16 +89,16 @@ def main():
     """
     The main function to orchestrate the ETL pipeline.
     """
-    app_name = "CustomerVotingEligibilityPipeline"
+    app_name = "CustomerVotingStatusPipeline"
     source_table = "gap_retail.customers"
-    destination_table = "gap_retail.customers2"
+    destination_table = "gap_retail.customers_tr"
 
     spark = get_spark_session(app_name)
 
     try:
         customers_df = read_table(spark, source_table)
 
-        transformed_customers_df = add_customer_eligibility_columns(customers_df)
+        transformed_customers_df = add_age_and_voting_status(customers_df)
 
         write_table(transformed_customers_df, destination_table)
 
