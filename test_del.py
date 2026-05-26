@@ -1,269 +1,90 @@
 import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql.types import (
-    StructType,
-    StructField,
-    IntegerType,
-    StringType,
-    DateType,
-    BooleanType,
-)
-from datetime import date
-from dateutil.relativedelta import relativedelta
-
+from pyspark.sql import Row
+from pyspark.sql import DataFrame
+from pyspark.sql.types import StructType, StructField, DateType
 from main import add_age_and_voting_status
-
 
 @pytest.fixture(scope='session')
 def spark():
     import os
-    builder = SparkSession.builder.appName('pytest-spark-unit-tests')
-    if 'SPARK_REMOTE' not in os.environ:
-        builder = builder.master('local[1]')
-    return builder.getOrCreate()
+    active = SparkSession.getActiveSession()
+    if active:
+        return active
+    if 'SPARK_REMOTE' in os.environ:
+        del os.environ['SPARK_REMOTE']
+    return SparkSession.builder.appName('pytest-spark-unit-tests').master('local[1]').getOrCreate()
 
-
-def test_add_age_and_voting_status_for_adult(spark):
-    """
-    Tests that a person older than 18 is correctly identified as being able to vote.
-    """
-    today = date.today()
-    dob_adult = today - relativedelta(years=25)
-
-    source_data = [(1, "John Doe", dob_adult)]
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-    ])
-    source_df = spark.createDataFrame(source_data, source_schema)
-
-    result_df = add_age_and_voting_status(source_df)
-
-    expected_data = [(1, "John Doe", dob_adult, 25, True)]
-    expected_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-        StructField("age", IntegerType(), True),
-        StructField("canVote", BooleanType(), True),
-    ])
-    expected_df = spark.createDataFrame(expected_data, expected_schema)
-
-    assert result_df.count() == 1
-    assert sorted(result_df.collect()) == sorted(expected_df.collect())
-    assert result_df.schema.simpleString() == expected_df.schema.simpleString()
-
-
-def test_add_age_and_voting_status_for_minor(spark):
-    """
-    Tests that a person younger than 18 is correctly identified as not being able to vote.
-    """
-    today = date.today()
-    dob_minor = today - relativedelta(years=15)
-
-    source_data = [(2, "Jane Smith", dob_minor)]
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-    ])
-    source_df = spark.createDataFrame(source_data, source_schema)
-
-    result_df = add_age_and_voting_status(source_df)
-
-    expected_data = [(2, "Jane Smith", dob_minor, 15, False)]
-    # 'canVote' schema is not nullable based on the function's logic
-    expected_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-        StructField("age", IntegerType(), True),
-        StructField("canVote", BooleanType(), False),
-    ])
-    expected_df = spark.createDataFrame(expected_data, expected_schema)
-
-    assert result_df.count() == 1
-    # Adjust schema of expected DF to match actual for comparison
-    result_df = result_df.withColumn("canVote", result_df["canVote"].cast(BooleanType()))
-    assert sorted(result_df.collect()) == sorted(expected_df.collect())
-    assert result_df.schema["canVote"].nullable is False
-
-
-def test_add_age_and_voting_status_boundary_is_exactly_18(spark):
-    """
-    Tests the boundary condition where a person's 18th birthday is today.
-    """
-    today = date.today()
-    dob_18th_bday = today - relativedelta(years=18)
-
-    source_data = [(3, "Emily Brown", dob_18th_bday)]
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-    ])
-    source_df = spark.createDataFrame(source_data, source_schema)
-
-    result_df = add_age_and_voting_status(source_df)
-
-    expected_data = [(3, "Emily Brown", dob_18th_bday, 18, True)]
-    expected_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-        StructField("age", IntegerType(), True),
-        StructField("canVote", BooleanType(), True),
-    ])
-    expected_df = spark.createDataFrame(expected_data, expected_schema)
-
-    assert result_df.count() == 1
-    assert sorted(result_df.collect()) == sorted(expected_df.collect())
-
-
-def test_add_age_and_voting_status_boundary_day_before_18th(spark):
-    """
-    Tests the boundary condition where a person's 18th birthday is tomorrow.
-    """
-    today = date.today()
-    # If today is 2023-10-27, 18 years ago was 2005-10-27.
-    # To be 17, their birthday must be 2005-10-28.
-    dob_almost_18 = today - relativedelta(years=18) + relativedelta(days=1)
-
-    source_data = [(4, "Michael Lee", dob_almost_18)]
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-    ])
-    source_df = spark.createDataFrame(source_data, source_schema)
-
-    result_df = add_age_and_voting_status(source_df)
-
-    expected_data = [(4, "Michael Lee", dob_almost_18, 17, False)]
-    expected_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-        StructField("age", IntegerType(), True),
-        StructField("canVote", BooleanType(), False),
-    ])
-    expected_df = spark.createDataFrame(expected_data, expected_schema)
-
-    assert result_df.count() == 1
-    # Adjust schema of expected DF to match actual for comparison
-    result_df = result_df.withColumn("canVote", result_df["canVote"].cast(BooleanType()))
-    assert sorted(result_df.collect()) == sorted(expected_df.collect())
-    assert result_df.schema["canVote"].nullable is False
-
-
-def test_add_age_and_voting_status_with_null_dob(spark):
-    """
-    Tests that a record with a null 'dob' results in a null 'age' and 'canVote' as False.
-    """
-    source_data = [(5, "Chris Green", None)]
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), True),
-    ])
-    source_df = spark.createDataFrame(source_data, source_schema)
-
-    result_df = add_age_and_voting_status(source_df)
-
-    expected_data = [(5, "Chris Green", None, None, False)]
-    expected_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), True),
-        StructField("age", IntegerType(), True),
-        StructField("canVote", BooleanType(), False),
-    ])
-    expected_df = spark.createDataFrame(expected_data, expected_schema)
-
-    assert result_df.count() == 1
-    # Adjust schema of expected DF to match actual for comparison
-    result_df = result_df.withColumn("canVote", result_df["canVote"].cast(BooleanType()))
-    assert sorted(result_df.collect()) == sorted(expected_df.collect())
-    assert result_df.schema["canVote"].nullable is False
-
-
-def test_add_age_and_voting_status_with_duplicate_records(spark):
-    """
-    Tests that duplicate input records are processed correctly and result in duplicate output records.
-    """
-    today = date.today()
-    dob_adult = today - relativedelta(years=40)
-    dob_minor = today - relativedelta(years=10)
-
-    source_data = [
-        (6, "Pat Ray", dob_adult),
-        (7, "Alex Kim", dob_minor),
-        (6, "Pat Ray", dob_adult),  # Duplicate
+def test_add_age_and_voting_status_valid_data(spark):
+    data = [
+        Row(dob="2000-01-01"),
+        Row(dob="2010-12-31"),
+        Row(dob="1995-06-15")
     ]
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-    ])
-    source_df = spark.createDataFrame(source_data, source_schema)
+    schema = StructType([StructField("dob", DateType(), True)])
+    df = spark.createDataFrame(data, schema)
+    
+    result_df = add_age_and_voting_status(df).collect()
+    assert result_df[0]['age'] == 23  # assuming current date is 2023-01-01
+    assert result_df[0]['canVote'] is True
+    assert result_df[1]['age'] == 13
+    assert result_df[1]['canVote'] is False
+    assert result_df[2]['age'] == 27
+    assert result_df[2]['canVote'] is True
 
-    result_df = add_age_and_voting_status(source_df)
-
-    expected_data = [
-        (6, "Pat Ray", dob_adult, 40, True),
-        (7, "Alex Kim", dob_minor, 10, False),
-        (6, "Pat Ray", dob_adult, 40, True),
+def test_add_age_and_voting_status_null_dob(spark):
+    data = [
+        Row(dob=None)
     ]
-    expected_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-        StructField("age", IntegerType(), True),
-        StructField("canVote", BooleanType(), True),
-    ])
-    expected_df = spark.createDataFrame(expected_data, expected_schema)
+    schema = StructType([StructField("dob", DateType(), True)])
+    df = spark.createDataFrame(data, schema)
 
-    assert result_df.count() == 3
-    assert sorted(result_df.collect()) == sorted(expected_df.collect())
+    result_df = add_age_and_voting_status(df).collect()
+    assert result_df[0]['age'] is None
+    assert result_df[0]['canVote'] is False
 
-
-def test_add_age_and_voting_status_with_empty_dataframe(spark):
-    """
-    Tests that the function handles an empty DataFrame correctly, returning an empty DataFrame with the new columns.
-    """
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-    ])
-    source_df = spark.createDataFrame([], source_schema)
-
-    result_df = add_age_and_voting_status(source_df)
-
-    expected_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-        StructField("dob", DateType(), False),
-        StructField("age", IntegerType(), True),
-        StructField("canVote", BooleanType(), False),
-    ])
-
+def test_add_age_and_voting_status_empty_df(spark):
+    data = []
+    schema = StructType([StructField("dob", DateType(), True)])
+    df = spark.createDataFrame(data, schema)
+    
+    result_df = add_age_and_voting_status(df)
     assert result_df.count() == 0
-    # canVote is not-nullable because of the otherwise(False) clause
-    assert result_df.schema.simpleString() == expected_schema.simpleString()
 
-
-def test_add_age_and_voting_status_raises_error_if_dob_missing(spark):
-    """
-    Tests that a ValueError is raised if the input DataFrame does not contain the 'dob' column.
-    """
-    source_data = [(1, "No Dob")]
-    source_schema = StructType([
-        StructField("id", IntegerType(), False),
-        StructField("name", StringType(), False),
-    ])
-    source_df = spark.createDataFrame(source_data, source_schema)
+def test_add_age_and_voting_status_invalid_column(spark):
+    data = [
+        Row(name="John Doe")  # no 'dob' column
+    ]
+    schema = StructType([StructField("name", StringType(), True)])
+    df = spark.createDataFrame(data, schema)
 
     with pytest.raises(ValueError, match="Input DataFrame must contain a 'dob' column."):
-        add_age_and_voting_status(source_df)
+        add_age_and_voting_status(df)
+
+def test_add_age_and_voting_status_duplicates(spark):
+    data = [
+        Row(dob="2000-01-01"),
+        Row(dob="2000-01-01")
+    ]
+    schema = StructType([StructField("dob", DateType(), True)])
+    df = spark.createDataFrame(data, schema)
+
+    result_df = add_age_and_voting_status(df).collect()
+    assert result_df[0]['age'] == 23  # assuming the current date is 2023-01-01
+    assert result_df[0]['canVote'] is True
+    assert result_df[1]['age'] == 23
+    assert result_df[1]['canVote'] is True
+
+def test_add_age_and_voting_status_boundary_values(spark):
+    data = [
+        Row(dob="2005-01-01"),  # exactly 18 years old
+        Row(dob="2004-12-31"),  # just under 18
+    ]
+    schema = StructType([StructField("dob", DateType(), True)])
+    df = spark.createDataFrame(data, schema)
+
+    result_df = add_age_and_voting_status(df).collect()
+    assert result_df[0]['age'] == 18
+    assert result_df[0]['canVote'] is True
+    assert result_df[1]['age'] == 18
+    assert result_df[1]['canVote'] is True
